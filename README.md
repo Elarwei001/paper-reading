@@ -22,6 +22,7 @@ paper-reading/
 
 | Topic | Description | Papers |
 |-------|-------------|--------|
+| [alphagenome](./alphagenome/) | DeepMind's AI for decoding non-coding DNA regions | 1 |
 | [world-models](./world-models/) | World models, cognitive AI, predictive learning | WIP |
 
 ## How to Use
