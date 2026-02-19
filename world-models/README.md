@@ -10,6 +10,7 @@ World models are internal representations that agents use to simulate and predic
 
 | File | Description |
 |------|-------------|
+| [jim-fan-second-pretraining-paradigm.md](./notes/jim-fan-second-pretraining-paradigm.md) | Jim Fan's essay on vision-first world models as the second pre-training paradigm |
 | [world-model-survey.md](./notes/world-model-survey.md) | Comprehensive survey of world models field |
 | [world-model-timeline.md](./notes/world-model-timeline.md) | Historical timeline of key developments |
 
@@ -30,6 +31,7 @@ World models are internal representations that agents use to simulate and predic
 ## Researchers
 
 - **Yann LeCun** (Meta FAIR) - JEPA, cognitive architectures
+- **Jim Fan** (NVIDIA) - Physical AI, world models for robotics
 - **David Ha** (Sakana AI) - Original world models paper
 - **Danijar Hafner** (DeepMind) - Dreamer series
 - **David Hsu** (NUS AdaComp) - Robot foundation models
