@@ -102,6 +102,38 @@ The "ape argument" is particularly compelling — it's an existence proof that p
 
 The prediction that 2026 marks the foundation year for Large World Models in robotics is bold but aligns with rapid progress in video generation quality.
 
+### Reflection: LLM Reasoning vs World Model Reasoning
+
+Jim Fan draws an analogy between world model reasoning and language model reasoning, but there's a fundamental difference:
+
+| Dimension | LLM (Word Prediction) | World Model (State Prediction) |
+|-----------|----------------------|-------------------------------|
+| Learning target | Statistical correlations in language | Causal structure of physics |
+| Latent space | Semantic space (concept relations) | Dynamics space (state evolution) |
+| Analogy | Chemistry/Physics "phenomenon description" | Mathematics "underlying laws" |
+
+**The hierarchy:**
+```
+Mathematics (abstract structure)
+  ↓ instantiates
+Physical Laws (concrete constraints)
+  ↓ generates
+Observable Phenomena (video/text)
+  ↑
+  └── Current models learn backwards from here
+```
+
+- **LLMs learn**: "When I see text about 'apple falling', what words typically follow"
+- **World Models should learn**: "How objects evolve in a gravitational field over time" (Newton's laws)
+
+**Key open question**: Do current video models (Sora, etc.) actually learn **physical laws**, or just **pixel-level statistical patterns**?
+
+The distinction matters:
+- **True physics**: Knows F=ma, can generalize to unseen situations
+- **Pixel statistics**: Knows "balls usually bounce off walls" but doesn't understand why
+
+This may be the core challenge for World Model research — how to make the model's latent space have **causal structure**, not just high-dimensional pixel correlations. The goal is to learn the "mathematics" (generative laws) rather than just the "chemistry/physics" (surface phenomena).
+
 ---
 
 *Added: 2026-02-19*
