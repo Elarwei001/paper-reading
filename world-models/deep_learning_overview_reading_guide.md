@@ -2,6 +2,8 @@
 ## 阅读导览 📖
 
 > Jürgen Schmidhuber, 2015 | 88页, 888篇参考文献
+> 
+> **Link**: https://arxiv.org/abs/1404.7828
 
 ---
 

@@ -102,8 +102,8 @@ JEPA：         输入 → 编码 → 在表征空间预测 → 不解码
 
 | 论文 | 作者 | 年份 | 核心贡献 |
 |-----|------|-----|---------|
-| A Path Towards Autonomous Machine Intelligence | LeCun | 2022 | JEPA 架构蓝图 |
-| World Models | Ha & Schmidhuber | 2018 | 早期世界模型框架 |
+| [A Path Towards Autonomous Machine Intelligence](https://openreview.net/forum?id=BZ5a1r-kVsf) | LeCun | 2022 | JEPA 架构蓝图 |
+| [World Models](https://arxiv.org/abs/1803.10122) | Ha & Schmidhuber | 2018 | 早期世界模型框架 |
 | The Book of Why | Pearl | 2018 | 因果推理入门 |
 
 ### 3.2 视觉世界模型
