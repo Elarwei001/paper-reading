@@ -4,6 +4,7 @@
 **Author**: Yann LeCun (NYU, Meta FAIR)
 **Date**: June 27, 2022
 **Type**: Position Paper
+**Link**: https://openreview.net/forum?id=BZ5a1r-kVsf
 **PDF Read**: 2026-02-18
 
 ---

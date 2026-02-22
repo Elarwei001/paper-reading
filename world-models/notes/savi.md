@@ -3,6 +3,7 @@
 **Paper**: Conditional Object-Centric Learning from Video
 **Authors**: Thomas Kipf, Gamaleldin F. Elsayed, Aravindh Mahendran, Austin Stone, Sara Sabour, Georg Heigold, Rico Jonschkowski, Alexey Dosovitskiy, Klaus Greff
 **Venue**: ICLR 2022
+**Link**: https://arxiv.org/abs/2111.12594
 **PDF Read**: 2026-02-18
 
 ---

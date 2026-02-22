@@ -2,7 +2,8 @@
 
 **Paper**: Relational Inductive Biases, Deep Learning, and Graph Networks
 **Authors**: Peter W. Battaglia et al. (28 authors from DeepMind, Google Brain, MIT, Edinburgh)
-**Date**: October 2018 (arXiv:1806.01261v3)
+**Date**: October 2018
+**Link**: https://arxiv.org/abs/1806.01261
 **PDF Read**: 2026-02-18
 
 ---

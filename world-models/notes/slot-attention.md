@@ -3,6 +3,7 @@
 **Paper**: Object-Centric Learning with Slot Attention
 **Authors**: Francesco Locatello, Dirk Weissenborn, Thomas Unterthiner, Aravindh Mahendran, Georg Heigold, Jakob Uszkoreit, Alexey Dosovitskiy, Thomas Kipf
 **Venue**: NeurIPS 2020
+**Link**: https://arxiv.org/abs/2006.15055
 **PDF Read**: 2026-02-18
 
 ---
