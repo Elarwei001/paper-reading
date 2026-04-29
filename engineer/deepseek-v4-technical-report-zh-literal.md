@@ -355,6 +355,166 @@ Muon 优化器需要完整的梯度矩阵来计算参数更新，这在与 Zero 
 
 ---
 
+## 4. 预训练
+
+### 4.1 数据构建
+
+在 DeepSeek-V3 的预训练数据基础上，我们致力于构建一个更具多样性、质量更高且有效上下文更长的训练语料库。我们持续改进数据构建流水线。对于来自网络的数据，我们实施过滤策略，以移除批量自动生成内容和模板化内容，从而降低模型坍塌风险（Zhu et al., 2024）。数学和编程语料仍然是训练数据的核心组成部分，我们还在中期训练阶段引入 agentic data，以进一步增强 DeepSeek-V4 系列的编码能力。对于多语言数据，我们为 DeepSeek-V4 构建了一个更大的语料库，以提升其对不同文化中长尾知识的捕捉能力。对于 DeepSeek-V4，我们尤其重视长文档数据整理，并优先纳入科学论文、技术报告以及其他体现独特学术价值的材料。综合以上各项，我们的预训练语料库包含超过 32T token，涵盖数学内容、代码、网页、长文档以及其他高质量类别。
+
+对于预训练数据，我们大体沿用了 DeepSeek-V3 的相同预处理策略。在 tokenizer 方面，我们在 DeepSeek-V3 tokenizer 的基础上，为上下文构建引入了少量特殊 token，同时仍将词表大小保持在 128K。我们还继承了 DeepSeek-V3 的 token-splitting（DeepSeek-AI, 2024）和 Fill-in-Middle（FIM）（DeepSeek-AI, 2024）策略。受 Ding et al. (2024) 启发，我们将来自不同来源的文档打包成合适的序列，以尽量减少样本截断。不同于 DeepSeek-V3 的是，我们在预训练期间采用 sample-level attention masking。
+
+### 4.2 预训练设置
+
+#### 4.2.1 模型设置
+
+**DeepSeek-V4-Flash**。我们将 Transformer 层数设为 43，隐藏维度 `d` 设为 4096。前两层使用纯滑动窗口注意力。后续层则交替使用 CSA 和 HCA。对于 CSA，我们将压缩率 `m` 设为 4，indexer query head 数 `n_h^I` 设为 64，indexer head dimension `c^I` 设为 128，供稀疏注意力选择的 KV 条目数（即 attention top-k）设为 512。对于 HCA，我们将压缩率 `m'` 设为 128。对于 CSA 和 HCA，我们都将 query head 数 `n_h` 设为 64，head dimension `c` 设为 512，query 压缩维度 `d_c` 设为 1024。输出投影分组数 `g` 设为 8，每个中间注意力输出的维度 `d_g` 设为 1024。对于滑动窗口注意力的附加分支，窗口大小 `n_win` 设为 128。我们在所有 Transformer block 中都采用 MoE 层，但前 3 个 MoE 层使用 Hash routing 策略。每个 MoE 层包含 1 个共享专家和 256 个路由专家，其中每个专家的中间隐藏维度为 2048。在这些路由专家中，每个 token 会激活 6 个专家。multi-token prediction 深度设为 1。对于 mHC，扩展系数 `n_hc` 设为 4，Sinkhorn-Knopp 迭代次数 `t_max` 设为 20。在这一配置下，DeepSeek-V4-Flash 总参数量为 284B，其中每个 token 激活 13B 参数。
+
+**DeepSeek-V4-Pro**。我们将 Transformer 层数设为 61，隐藏维度 `d` 设为 7168。前两层使用 HCA。后续层则交替使用 CSA 和 HCA。对于 CSA，我们将压缩率 `m` 设为 4，indexer query head 数 `n_h^I` 设为 64，indexer head dimension `c^I` 设为 128，供稀疏注意力选择的 KV 条目数（即 attention top-k）设为 1024。对于 HCA，我们将压缩率 `m'` 设为 128。对于 CSA 和 HCA，我们都将 query head 数 `n_h` 设为 128，head dimension `c` 设为 512，query 压缩维度 `d_c` 设为 1536。输出投影分组数 `g` 设为 16，每个中间注意力输出的维度 `d_g` 设为 1024。对于滑动窗口注意力的附加分支，窗口大小 `n_win` 设为 128。我们在所有 Transformer block 中都采用 MoE 层，但前 3 个 MoE 层使用 Hash routing 策略。每个 MoE 层包含 1 个共享专家和 384 个路由专家，其中每个专家的中间隐藏维度为 3072。在这些路由专家中，每个 token 会激活 6 个专家。multi-token prediction 深度设为 1。对于 mHC，扩展系数 `n_hc` 设为 4，Sinkhorn-Knopp 迭代次数 `t_max` 设为 20。在这一配置下，DeepSeek-V4-Pro 总参数量为 1.6T，其中每个 token 激活 49B 参数。
+
+#### 4.2.2 训练设置
+
+**DeepSeek-V4-Flash**。我们对绝大多数参数使用 Muon 优化器（Jordan et al., 2024；Liu et al., 2025），但对于 embedding 模块、prediction head 模块以及所有 RMSNorm 模块的权重，使用 AdamW 优化器（Loshchilov and Hutter, 2017）。对于 AdamW，我们将超参数设为 `β1 = 0.9`、`β2 = 0.95`、`ε = 10^-20`，以及 `weight_decay = 0.1`。对于 Muon，我们将 momentum 设为 0.95，weight decay 设为 0.1，并将每个更新矩阵的 RMS 重新缩放到 0.18，以复用 AdamW 的学习率。我们在 32T token 上训练 DeepSeek-V4-Flash，并且像 DeepSeek-V3 一样，也采用一种 batch size 调度策略，使 batch size（以 token 计）从较小值逐渐增加到 75.5M，并在训练的大部分时间里保持在 75.5M。学习率在前 2000 步进行线性 warmup，并在训练的大部分时间保持为 `2.7 × 10^-4`。在训练末期，我们再按照 cosine schedule 将学习率衰减到 `2.7 × 10^-5`。训练从 4K 的序列长度开始，然后逐步把训练序列长度扩展到 16K、64K 和 1M。对于稀疏注意力设置，我们首先在前 1T token 中使用 dense attention 对模型进行 warmup，然后在序列长度达到 64K 时引入 sparse attention，并在后续训练中保持 sparse attention。当引入 attention sparsity 时，我们先设置一个较短阶段来 warm up CSA 中的 lightning indexer，然后在训练的大部分时间里用 sparse attention 继续训练模型。对于无辅助损失负载均衡，我们将 bias update speed 设为 0.001。对于 balance loss，我们将其 loss weight 设为 0.0001，以避免单个序列内部出现极端不平衡。MTP loss weight 在训练的大部分时间里设为 0.3，而在学习率开始衰减时改为 0.1。
+
+**DeepSeek-V4-Pro**。除具体超参数数值外，DeepSeek-V4-Pro 的训练设置与 DeepSeek-V4-Flash 基本一致。我们对绝大多数参数使用 Muon 优化器，但对 embedding 模块、prediction head 模块以及所有 RMSNorm 模块的权重使用 AdamW 优化器。AdamW 与 Muon 的超参数与 DeepSeek-V4-Flash 相同。我们在 33T token 上训练 DeepSeek-V4-Pro，并同样采用 batch size 调度策略，其中最大 batch size 为 94.4M token。学习率调度策略大体与 DeepSeek-V4-Flash 相同，但峰值学习率设为 `2.0 × 10^-4`，结束学习率设为 `2.0 × 10^-5`。训练同样从 4K 的序列长度开始，并逐步扩展到 16K、64K 和 1M。与 DeepSeek-V4-Flash 相比，DeepSeek-V4-Pro 会先经历更长的 dense attention 阶段，而引入 sparse attention 的策略与 DeepSeek-V4-Flash 相同，都遵循两阶段训练方法。对于无辅助损失负载均衡，我们将 bias update speed 设为 0.001。对于 balance loss，我们将其 loss weight 设为 0.0001，以避免单个序列内部出现极端不平衡。MTP loss weight 在训练的大部分时间里设为 0.3，而在学习率开始衰减时改为 0.1。
+
+#### 4.2.3 缓解训练不稳定性
+
+训练万亿参数级别的 MoE 模型会带来显著稳定性挑战，DeepSeek-V4 系列也不例外。我们在训练过程中遇到了明显的不稳定性问题。虽然简单回滚可以暂时恢复训练状态，但它并不能作为长期解决方案，因为它无法阻止 loss spike 再次出现。通过经验分析，我们发现 spike 的出现与 MoE 层中的 outlier 持续相关，而 routing 机制本身似乎还会加剧这些 outlier 的产生。因此，我们尝试从两个维度解决这一问题：一是打破由 routing 引起的恶性循环，二是直接抑制异常值。幸运的是，我们发现了两种能够有效维持训练稳定性的实用技术。尽管目前我们对其底层机理的完整理论理解仍然是一个开放问题，但我们公开分享这些方法，以促进社区进一步探索。
+
+**Anticipatory Routing**。我们发现，将 backbone network 与 routing network 的同步更新解耦，可以显著提升训练稳定性。因此，在 step `t` 时，我们用当前网络参数 `θ_t` 进行特征计算，但 routing index 则使用历史网络参数 `θ_(t-Δ_t)` 计算并应用。在实践中，为了避免两次加载模型参数的额外开销，我们会在 step `t-Δ_t` 时就提前读取 step `t` 所需的数据。我们以“预先”的方式计算并缓存后续 step `t` 要使用的 routing index，因此我们将这一方法命名为 Anticipatory Routing。我们还在基础设施层面对此进行了大量优化。首先，由于预先计算 routing index 只需要对数据做一次 forward pass，我们精心编排了 pipeline 执行流程，并对计算与 Expert Parallelism（EP）通信进行了重叠，从而成功将 Anticipatory Routing 带来的额外 wall-clock 时间开销控制在约 20%。其次，我们引入了一套自动检测机制：当发生 loss spike 时，它会触发一次短回滚，并仅在该阶段启用 Anticipatory Routing；在这一模式持续一段时间后，系统又会恢复到标准训练模式。最终，这种动态应用方式使我们能够在几乎可以忽略的整体额外训练开销下避免 loss spike，而且不会损害模型性能。
+
+**SwiGLU Clamping**。在以往文献中（Bello et al., 2017；Riviere et al., 2024），clamping 已被显式用于限制数值范围，从而增强训练稳定性。在我们的实际训练过程中，我们经验性地发现，应用 SwiGLU clamping（OpenAI, 2025）能够有效消除 outlier，并显著帮助稳定训练过程，同时不会损害性能。在 DeepSeek-V4-Flash 和 DeepSeek-V4-Pro 的整个训练过程中，我们将 SwiGLU 的线性部分截断在 `[-10, 10]` 范围内，同时将 gate 部分的上界限制为 10。
+
+### 4.3 评测
+
+#### 4.3.1 评测基准
+
+对于基础模型的评测，我们考虑四个关键维度上的 benchmark：世界知识、语言理解与推理、代码与数学，以及长上下文处理。
+
+世界知识 benchmark 包括 AGIEval（Zhong et al., 2023）、C-Eval（Huang et al., 2023）、CMMLU（Li et al., 2023）、MMLU（Hendrycks et al., 2020）、MMLU-Redux（Gema et al., 2024）、MMLU-Pro（Wang et al., 2024b）、MMMLU（OpenAI, 2024a）、MultiLoKo（Hupkes and Bogoychev, 2025）、Simple-QA verified（Haas et al., 2025）、SuperGPQA（Du et al., 2025）、FACTS Parametric（Cheng et al., 2025）以及 TriviaQA（Joshi et al., 2017）。
+
+语言理解与推理 benchmark 包括 BigBench Hard（BBH）（Suzgun et al., 2022）、DROP（Dua et al., 2019）、HellaSwag（Zellers et al., 2019）、CLUEWSC（Xu et al., 2020）以及 WinoGrande（Sakaguchi et al., 2019）。
+
+代码与数学 benchmark 包括 BigCodeBench（Zhuo et al., 2025）、HumanEval（Chen et al., 2021）、GSM8K（Cobbe et al., 2021）、MATH（Hendrycks et al., 2021）、MGSM（Shi et al., 2023）以及 CMath（Wei et al., 2023）。
+
+长上下文 benchmark 包括 LongBench-V2（Bai et al., 2025b）。
+
+**表 1**｜DeepSeek-V3.2-Base、DeepSeek-V4-Flash-Base 和 DeepSeek-V4-Pro-Base 的比较。所有模型都在我们的内部框架中评测，并共享完全相同的评测设置。分差不超过 0.3 的成绩视为同一水平。每行最高分以粗体标出，第二高分以下划线标出。
+
+#### 4.3.2 评测结果
+
+在表 1 中，我们给出了 DeepSeek-V3.2、DeepSeek-V4-Flash 和 DeepSeek-V4-Pro 基础模型的详细比较，所有模型都在统一的内部框架下、在严格一致的设置中进行评测。
+
+将 DeepSeek-V4-Flash-Base 与 DeepSeek-V3.2-Base 对比，可以看到一个很有说服力的效率故事。尽管使用了显著更少的激活参数量和总参数量，DeepSeek-V4-Flash-Base 仍然在大范围 benchmark 上超过了 DeepSeek-V3.2-Base。这一优势在世界知识任务和具有挑战性的长上下文场景中尤为明显。这些结果强调，DeepSeek-V4-Flash-Base 中的架构改进、数据质量提升以及训练优化，即使在更紧凑的参数预算下，也带来了更优性能，使其在大多数评测上有效超越了参数规模更大的 DeepSeek-V3.2-Base。
+
+此外，DeepSeek-V4-Pro-Base 进一步展现了决定性的能力跃升，几乎在所有方面都压过了 DeepSeek-V3.2-Base 和 DeepSeek-V4-Flash-Base。随着几乎所有类别上的提升，DeepSeek-V4-Pro-Base 在最具挑战性的 benchmark 上，把 DeepSeek 基础模型的性能推到了新高。在知识密集型评测中，它带来了显著增益，同时也大幅提升了长上下文理解能力。在大多数推理和代码 benchmark 上，DeepSeek-V4-Pro-Base 同样超过了前两代模型。这种全面提升证实，DeepSeek-V4-Pro-Base 是 DeepSeek 系列中最强的基础模型，在知识、推理、编码和长上下文能力的整个谱系上都超过了其前代。
+
+## 5. 后训练
+
+### 5.1 后训练流水线
+
+在预训练完成后，我们进行了后训练阶段，以得到 DeepSeek-V4 系列的最终模型。尽管训练流水线整体上与 DeepSeek-V3.2 大体相同，但其中发生了一项关键的方法论替换：混合强化学习（RL）阶段被 On-Policy Distillation（OPD）彻底取代。
+
+#### 5.1.1 Specialist Training
+
+领域 specialist 的开发，是通过调整 DeepSeek-V3.2 的训练流水线来进行的。具体而言，每个模型都顺序经历了初始微调阶段，以及随后在领域特定 prompt 和 reward signal 引导下进行的 Reinforcement Learning（RL）阶段。对于 RL 阶段，我们实现了 Group Relative Policy Optimization（GRPO）算法，并使其超参数与我们此前研究中的设置保持高度一致（DeepSeek-AI, 2025；DeepSeek-AI, 2025）。
+
+**推理强度（Reasoning Efforts）**。众所周知，模型在推理任务上的表现，本质上取决于其付出的计算努力。因此，我们在不同的 RL 配置下训练了不同的 specialist model，以便开发在不同推理能力上优化过的模型。正如表 2 所示，DeepSeek-V4-Pro 和 DeepSeek-V4-Flash 都支持三种特定的推理强度模式。对于每一种模式，我们在 RL 训练期间施加不同的长度惩罚和上下文窗口，这会导致推理输出 token 长度不同。为了整合这些不同的推理模式，我们使用了由 `<think>` 和 `</think>` token 标记的专门响应格式。此外，对于 “Think Max” 模式，我们会在 system prompt 开头添加一条特定指令，以引导模型的推理过程，如表 3 所示。
+
+**生成式奖励模型（Generative Reward Model）**。通常，对于容易验证的任务，可以使用简单的基于规则的 verifier 或测试用例来有效优化。相比之下，难以验证的任务传统上依赖 Reinforcement Learning from Human Feedback（RLHF），而这需要大量人工标注来训练一个标量奖励模型。然而，在 DeepSeek-V4 系列的后训练阶段，我们放弃了这些传统的基于标量的奖励模型。相反，为了处理难以验证的任务，我们整理了 rubric-guided RL 数据，并采用 Generative Reward Model（GRM）来评估策略轨迹。关键在于，我们直接对 GRM 本身施加 RL 优化。在这一范式中，actor network 天然就充当了 GRM，从而使模型的评估（judging）能力能够与其标准生成能力一起被联合优化。通过统一这两种角色，模型内部的推理能力被自然融合进其评估过程，从而产生了高度稳健的评分。此外，这种方法只需极少量多样化的人类标注，就能实现优越性能，因为模型会利用自身逻辑在复杂任务之间进行泛化。
+
+**工具调用模式与特殊 token**。与前一版本保持一致，我们使用专门的 `<think></think>` 标签来标识推理路径。在 DeepSeek-V4 系列中，我们引入了一种新的工具调用 schema，该 schema 使用特殊 token `|DSML|`，并采用基于 XML 的格式来调用工具，如表 4 所示。我们的实验表明，XML 格式能够有效缓解 escaping failure，并减少工具调用错误，从而为模型-工具交互提供更稳健的接口。
+
+**交错式思考（Interleaved Thinking）**。DeepSeek-V3.2 引入了一种上下文管理策略：它会在工具结果轮次之间保留推理轨迹，但一旦新的用户消息到来，就会丢弃这些轨迹。虽然这一策略是有效的，但在复杂的 agent 工作流中，它仍然造成了不必要的 token 浪费，因为每一个新的用户轮次都会冲掉所有已积累的推理内容，迫使模型从头重建问题求解状态。借助 DeepSeek-V4 系列扩展到 100 万 token 的上下文窗口，我们进一步优化了这一机制，以最大化交错式思考在 agent 环境中的效果：
+
+- **工具调用场景**。如图 7(a) 所示，所有推理内容都会在整个对话过程中被完整保留。不同于 DeepSeek-V3.2 在每次新用户轮次到来时都会丢弃思考轨迹，DeepSeek-V4 系列会在所有轮次中保留完整的推理历史，甚至跨越用户消息边界。这使模型能够在长时程 agent 任务中维持一条连贯、累积的思维链。
+
+- **一般对话场景**。如图 7(b) 所示，原有策略得以保留：当前一轮的推理内容会在新用户消息到达时被丢弃，从而在那些持久化推理轨迹收益有限的场景中保持上下文简洁。
+
+与 DeepSeek-V3.2 一样，若 agent 框架通过用户消息来模拟工具交互（例如 Terminus），则可能不会触发工具调用上下文路径，因此也无法从增强后的推理持久性中受益。对于这种架构，我们仍然建议使用 non-think 模型。
+
+**Quick Instruction**。在 chatbot 场景中，在生成响应之前，必须先执行若干辅助任务（例如判断是否触发 web search、意图识别等）。传统上，这些任务由一个单独的小模型处理，但这样会带来重复 prefilling，因为它无法复用现有 KV cache。为解决这一限制，我们引入了 Quick Instruction。我们把一组专门的特殊 token 直接附加到输入序列中，其中每个 token 对应一个特定辅助任务。通过直接复用已经计算好的 KV cache，这一机制完全避免了重复 prefilling，并允许某些任务，例如生成搜索 query 以及判断 authority 和 domain，并行执行。因此，这种方法显著降低了用户感知到的 time-to-first-token（TTFT），并消除了维护和迭代额外小模型的工程负担。受支持的 Quick Instruction token 总结在表 5 中。
+
+#### 5.1.2 On-Policy Distillation
+
+在通过专门微调和强化学习训练出多个领域专家后，我们采用多教师 On-Policy Distillation（OPD）作为将专家能力合并到最终模型中的主要技术。OPD 已经成为一种有效的后训练范式，可以高效地将领域专家的知识和能力迁移到一个统一的单模型中。其实现方式是：让 student 在其自身生成的轨迹上，从 teacher 模型的输出分布中学习。形式化地，给定一组 `N` 个专家模型 `{π_E1, π_E2, ..., π_EN}`，OPD 的目标函数定义为：
+
+`L_OPD(θ) = Σ_(i=1)^N w_i · D_KL(π_θ || π_Ei)`  (29)
+
+在这个公式中，`w_i` 表示为每个专家分配的权重，通常由该专家的相对重要性决定。为了计算 reverse KL loss `D_KL(π_θ || π_Ei)`，需要从 student `π_θ` 中采样训练轨迹，以保持 on-policy learning。其底层逻辑保证统一策略 `π_θ` 会有选择地向当前任务上下文相关的 specialist expert 学习，例如在数学推理任务上对齐数学专家，在编程任务上对齐编码专家。通过这一机制，原本物理上分散在不同 expert 权重中的知识，会通过 logits-level alignment 被整合进统一的参数空间，从而在实践上规避传统 weight-merging 或混合 RL 技术中经常出现的性能退化。在这一阶段，我们使用了十多个覆盖不同领域的 teacher model，对单一 student model 进行蒸馏。
+
+在处理上述 OPD 目标时，已有工作通常会把 full-vocabulary KL loss 简化成逐 token 位置上的 token-level KL 估计，并通过在 policy loss 计算中，以 `sg log π_Ei(y_t | x, y_<t)`（其中 `sg` 表示 stop gradient 操作）替代 advantage estimate，从而复用 RL 框架。尽管这种做法节省资源，但它会带来较高的梯度估计方差，并且常常导致训练不稳定。因此，我们在 OPD 中采用 full-vocabulary logit distillation。通过在计算 reverse KL loss 时保留完整的 logit 分布，我们获得了更稳定的梯度估计，并能更忠实地蒸馏 teacher 的知识。在下一小节中，我们将介绍为使 full-vocabulary OPD 能够大规模可行所做的工程工作。
+
+### 5.2 RL 与 OPD 基础设施
+
+我们的后训练基础设施建立在为 DeepSeek-V3.2 开发的可扩展框架之上。具体而言，我们集成了第 3.5 节所述的同一套分布式训练栈，以及前文引入的 rollout engine，用于高效自回归采样。在这一基础之上，我们又在当前工作中引入了如下主要增强。这些设计使得涉及十多个不同 teacher model 的超长上下文 RL 和 OPD 合并任务能够高效执行，从而显著加快模型发布的迭代周期。
+
+#### 5.2.1 FP4 量化集成
+
+我们使用 FP4（MXFP4）量化来加速 rollout 以及所有仅推理的 forward pass，包括 teacher model 和 reference model 的 forward pass，以减少内存流量和采样延迟。正如第 3.4 节所述，在 rollout 和推理阶段，我们直接使用原生 FP4 权重。对于训练步骤，则通过一次无损的 FP4 到 FP8 反量化来模拟 FP4 量化，这使我们可以无缝复用现有带 FP32 master weights 的 FP8 mixed-precision 框架，而无需修改 backward pipeline。
+
+#### 5.2.2 面向全词表 OPD 的高效教师调度
+
+我们的框架支持 full-vocabulary On-Policy Distillation（OPD），其 teacher 数量理论上可以无限扩展，而每个 teacher 甚至都可能拥有万亿级参数。为实现这一点，所有 teacher 权重都会被卸载到集中式分布式存储中，并在 teacher forward pass 期间按需加载，同时采用类似 ZeRO 的参数切分，以缓解 I/O 和 DRAM 压力。此外，对于词表大小 `|V| > 100k` 的场景，即便将所有 teacher 的 logits 写到磁盘，直接物化它们的代价也高得无法接受。为此，我们在 forward pass 时，只把最后一层的 teacher hidden states 缓存在集中式 buffer 中。在训练阶段，再取回这些缓存状态，并通过相应的 prediction head 模块，在线重构完整 logits。这一设计只带来可以忽略的重计算开销，却完全规避了显式物化 logits 所带来的内存负担。为了降低 teacher prediction head 的 GPU 内存占用，我们在数据分发时按 teacher index 对训练样本排序。这样安排可以确保每个不同的 teacher head 在每个 mini-batch 中只需加载一次，并且任意时刻设备内存中最多只驻留一个 teacher head。所有参数和 hidden state 的加载/卸载操作都以异步方式在后台进行，不会阻塞关键路径上的计算。最后，teacher 与 student logits 之间的精确 KL divergence 通过一个专门的 TileLang kernel 来计算，从而加速这一计算并减少动态内存分配。
+
+#### 5.2.3 可抢占且容错的 Rollout 服务
+
+为了最大化 GPU 资源利用率，并支持为高优先级任务快速调配硬件资源，我们的 GPU 集群采用了全集群范围的可抢占任务调度器，在该调度器下，任何正在运行的任务都可能在任意时刻被抢占。此外，大规模 GPU 集群中的硬件故障也非常常见。为此，我们为 RL/OPD rollout 实现了一套可抢占、可容错的大语言模型生成服务。
+
+具体来说，我们为每个生成请求实现了一个 token 粒度的 Write-Ahead Log（WAL）。每当某个请求生成一个新 token，我们就会立刻把它追加到该请求的 WAL 中。在发生抢占时，我们会暂停推理引擎，并保存尚未完成请求的 KV cache。恢复时，我们利用持久化保存的 WAL 和保存下来的 KV cache 继续解码。即便发生了致命硬件错误，我们也能够利用 WAL 中持久化的 token 重新执行 prefill 阶段，从而重建 KV cache。
+
+需要强调的是，从数学上讲，把未完成请求从头重新生成是不正确的，因为这会引入长度偏置。由于更短的响应更容易在中断中“幸存”，如果每次中断后都从头重新生成，模型就会更倾向于在中断发生时产生更短序列。如果推理栈本身具备 batch-invariant 和 deterministic 特性，那么这一正确性问题也可以通过在 sampler 中使用一致的伪随机数种子重新生成来解决。然而，这种方法仍然需要额外重新执行 decoding 阶段，因此相比我们的 token 粒度 WAL 方案效率低得多。
+
+#### 5.2.4 面向百万 Token 上下文的 RL 框架扩展
+
+我们为 100 万 token 序列上的高效 RL 与 OPD 引入了专门优化。在 rollout 阶段，我们采用了第 5.2.3 节所述的可抢占、可容错 rollout 服务。对于推理和训练阶段，我们将 rollout 数据格式拆分为轻量的 metadata 和重量级的逐 token 字段。在数据分发期间，可以加载整个 rollout 数据的 metadata 以进行全局打乱和 packing layout 计算。而重量级的逐 token 字段，则通过 shared-memory data loader 加载，以消除节点内数据冗余，并在以 mini-batch 为粒度消费后立即释放，从而显著降低 CPU 和 GPU 内存压力。设备上的 mini-batch 数量会根据工作负载动态决定，以便在计算吞吐与 I/O overlap 之间做高效权衡。
+
+#### 5.2.5 面向 Agentic AI 的沙箱基础设施
+
+为了满足后训练和评测中 agentic AI 的多样化执行需求，我们构建了一个生产级沙箱平台，名为 DeepSeek Elastic Compute（DSec）。DSec 包含三个 Rust 组件，即 API gateway（Apiserver）、每台主机上的 agent（Edge）以及集群监控器（Watcher），它们通过自定义 RPC 协议互联，并构建在 3FS 分布式文件系统（DeepSeek-AI, 2025）之上实现横向扩展。在生产环境中，一个 DSec 集群可以管理数十万个并发沙箱实例。
+
+DSec 的设计动机来自四点观察：（1）agentic 工作负载高度异质，从轻量函数调用到完整的软件工程流水线，涵盖了不同操作系统与安全要求；（2）环境镜像种类多且体积大，但必须支持快速加载和迭代式定制；（3）高密度部署要求高效利用 CPU 和内存；（4）沙箱生命周期必须与 GPU 训练调度协同，包括抢占与基于 checkpoint 的恢复。基于这些观察，我们在后文中分别阐述 DSec 的四项核心设计。
+
+**统一接口下的四种执行基座**。DSec 通过单一 Python SDK（libdsec）抽象出四种执行基座。Function Call 会把无状态调用分发到一个预热容器池中，以消除冷启动开销。Container 完全兼容 Docker，并利用 EROFS（Gao et al., 2019）的按需加载来高效组装镜像。microVM 基于 Firecracker（Agache et al., 2020）构建，为安全敏感、高密度部署场景提供 VM 级隔离。fullVM 基于 QEMU（Bellard, 2005）构建，支持任意 guest 操作系统。这四者共享同一套 API 表面，包括命令执行、文件传输和 TTY 访问；在它们之间切换，只需修改一个参数。
+
+**通过分层存储实现快速镜像加载**。DSec 通过分层、按需加载的方式，在快速启动与日益增多的大体量环境镜像之间取得平衡。对于容器，基础镜像和文件系统提交会以 3FS 支持的只读 EROFS 层形式存储，并直接挂载到 overlay 的 lowerdir 中。我们在挂载时把文件元数据保留在本地磁盘上，而数据块则在访问时从 3FS 按需拉取。对于 microVM，DSec 使用 overlaybd（Li et al., 2020）磁盘格式：只读 base layer 驻留在 3FS 上以便跨实例共享，而写入则进入本地 copy-on-write 层。这些快照是可以链式组合的，因此支持高效版本化和毫秒级恢复。
+
+**大规模并发下的密度优化**。为了在每个集群中容纳数十万个沙箱，DSec 重点解决了两个资源瓶颈。首先，它在虚拟化环境中缓解了重复的 page-cache 占用，并实施内存回收，从而支持安全的 overcommit。其次，它减轻了容器运行时中的 spinlock contention，从而降低了每个沙箱的 CPU 开销，并显著提升单机可承载密度。
+
+**轨迹日志与抗抢占恢复**。DSec 为每个沙箱维护一条全局有序的 trajectory log，持续记录每一次命令调用及其结果。这条轨迹有三个用途：（1）客户端快进。在训练任务被抢占时，沙箱资源仍然会被保留；恢复后，DSec 会重放之前已完成命令的缓存结果，从而加速任务恢复，同时避免重新执行非幂等操作所引发的错误；（2）细粒度溯源。每一次状态变化的来源及对应结果都可以被追踪；（3）确定性回放。任何历史会话都可以依据其轨迹被忠实复现。
+
+### 5.3 标准 Benchmark 评测
+
+#### 5.3.1 评测设置
+
+**知识与推理**。知识与推理数据集包括 MMLU-Pro（Wang et al., 2024b）、GPQA（Rein et al., 2023）、Human Last Exam（Phan et al., 2025）、Simple-QA Verified（Haas et al., 2025）、Chinese-SimpleQA（He et al., 2024）、LiveCodeBench-v6（Jain et al., 2024）、CodeForces（内部 benchmark）、HMMT 2026 Feb、Apex（Balunović et al., 2025）、Apex Shortlist（Balunović et al., 2025）、IMOAnswerBench（Luong et al., 2025）以及 PutnamBench（Tsoukalas et al., 2024）。
+
+对于代码，我们在 LiveCodeBench-v6 和一个内部 Codeforces benchmark 上评测 DeepSeek-V4 系列。对于 Codeforces，我们收集了 14 场 Codeforces Division 1 比赛，共 114 道题（时间范围为 2025 年 5 月到 2025 年 11 月）。Elo rating 的计算方式如下：对于每场比赛，我们为每道题生成 32 个候选解。然后，对每道题独立地从这 32 个解中无放回抽取 10 个，并以随机顺序排列成提交序列。每一次提交都会在由领域专家构建的测试集上进行评判。对于成功解出的题目，其得分遵循 OpenAI（2025）的 penalty scheme：模型会获得与其“解出该题且此前失败尝试次数相同”的人类参赛者的中位分。这样就能为每一个采样得到的提交序列计算出总比赛得分，再由此换算为比赛排名，并进一步通过标准 Codeforces rating system 估算 rating。比赛层面的期望 rating，定义为在所有可能的随机抽取和 10 次提交顺序排列上的这一估计 rating 的期望值。模型的总体 rating 则是这 14 场比赛比赛层面期望 rating 的平均值。
+
+对于推理与知识任务，我们将 temperature 设为 1.0，并分别为 Non-think、High 和 Max 模式设置 8K、128K 和 384K token 的上下文窗口。对于数学任务（例如 HMMT、IMOAnswerBench、Apex 和 HLE），我们使用如下模板进行评测：
+
+`"{question}\nPlease reason step by step, and put your final answer within \boxed{}."`
+
+对于数学任务上的 DeepSeek-V4-Pro-Max，我们使用如下模板以诱导更深入推理：
+
+`"Solve the following problem. The problem may ask you to prove a statement, or ask for an answer. If finding an answer is required, you should come up with the answer, and your final solution should also be a rigorous proof of that answer being valid.\n\n{question}"`
+
+对于形式化数学任务，我们在 Lean v4.28.0-rc1（Moura and Ullrich, 2021）的 agentic 设置中进行评测，允许访问 Lean 编译器和语义 tactic 搜索引擎，并在最大推理强度下运行最多 500 次工具调用。此外，我们还评测了一条更高计算成本的流水线：先生成候选自然语言解答，并通过 self-verification（Shao et al., 2025）进行筛选，然后再将保留下来的解答作为引导，提供给 formal agent 去证明对应的 Lean 命题。这一设计利用非形式推理来改善探索效率，同时通过形式验证来保持严格正确性。只有当严格 verifier Comparator 在这两种设置下都接受某项提交时，该提交才被记为正确。
+
+对于 K2.6 和 GLM-5.1，我们保留了一些空白项，因为它们的 API 过于繁忙，无法返回我们查询的结果。
+
+**100 万 Token 上下文**。由于 DeepSeek-V4 系列支持 100 万 token 上下文，我们选择 OpenAI MRCR（OpenAI, 2024b）和 CorpusQA（Lu et al., 2026）作为 benchmark，以评测模型在长上下文场景下的表现。我们对 Claude Opus 4.6 和 Gemini 3.1 Pro 也在这些任务上进行了重新评测，以统一所有模型的配置。我们没有评测 GPT-5.4，因为其 API 对相当一部分查询都未能返回结果。
+
+**Agent**。Agent 数据集包括 Terminal Bench 2.0（Merrill et al., 2026）、SWE-Verified（OpenAI, 2024e）、SWE Multilingual（Yang et al., 2025）、SWE-Pro（Deng et al., 2025）、BrowseComp（Wei et al., 2025）、MCPAtlas（Bandi et al., 2026）的公开评测集、GDPval-AA（AA, 2025；Patwardhan et al., 2025）以及 Tool-Decathlon（Li et al., 2025）。
+
+对于代码 agent 任务（SWE-Verified、Terminal-Bench、SWE-Pro、SWE Multilingual），我们使用自研内部评测框架来评测 DeepSeek-V4 系列。该框架提供一组最小工具，也就是 bash 工具和文件编辑工具。最大交互步数设为 500，最大上下文长度设为 512K token。对于 Terminal-Bench 2.0，我们注意到 GLM-5.1 所指出的环境相关问题。尽管如此，为了保持一致性，我们仍在原始 Terminal-Bench 2.0 数据集上报告性能。在 Terminal-Bench 2.0 Verified 子集上，DeepSeek-V4-Pro 的得分约为 72.0。
+
+对于搜索 agent 任务（BrowseComp、带工具的 HLE），我们也使用自研 harness，并提供 websearch 与 Python 工具，同时将最大交互步数设为 500，最大上下文长度设为 512K token。对于 BrowseComp，我们采用与 DeepSeek-V3.2（DeepSeek-AI, 2025）相同的 discard-all 上下文管理策略。
+
+#### 5.3.2 评测结果
+
+**表 6**｜DeepSeek-V4-Pro-Max 与闭源/开源模型的比较。"Max"、"xHigh" 和 "High" 表示推理强度。最佳结果以粗体高亮，第二佳结果以下划线标出。
+
 ## 当前状态说明
 
 本文件遵循“严格逐段、按章节对应”的翻译规范。
@@ -362,7 +522,15 @@ Muon 优化器需要完整的梯度矩阵来计算参数更新，这在与 Zero 
 当前已完成：
 - 摘要
 - 第 1 章
-- 第 2 章（截至现有可稳定抽取的内容）
-- 第 3 章（按当前可稳定抽取文本落盘）
+- 第 2 章
+- 第 3 章
+- 第 4 章
+- 第 5 章前半部分（已推进到 5.3.2 标题处）
 
-后续如果继续推进，应继续直接对照 PDF / 文本抽取结果，把第 2.3 之后和第 3 章后续细节进一步补全为更完整的逐段版。
+后续如果继续推进，应继续把：
+- 第 5.3.2 详细结果
+- 第 5.4 真实世界任务
+- 第 6 章
+- 附录与评测细节
+
+继续按同样标准补齐。
